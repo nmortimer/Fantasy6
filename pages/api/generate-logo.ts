@@ -1,35 +1,52 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getProvider } from '@/lib/imageProvider';
-import { Team } from '@/lib/utils';
 import { z } from 'zod';
 
-const schema = z.object({
-  team: z.object({
-    id: z.string(),
-    name: z.string(),
-    owner: z.string(),
-    mascot: z.string(),
-    primary: z.string().regex(/^#?[0-9a-fA-F]{6}$/),
-    secondary: z.string().regex(/^#?[0-9a-fA-F]{6}$/),
-    seed: z.number(),
-    logoUrl: z.string().nullable().optional()
-  })
+const TeamSchema = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  owner: z.string().optional(),
+  mascot: z.string(),
+  primary: z.string(),   // accepts "#RRGGBB" or RRGGBB
+  secondary: z.string(), // accepts "#RRGGBB" or RRGGBB
+  seed: z.number().optional(),
+  logoUrl: z.string().nullable().optional(),
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse){
-  if(req.method !== 'POST') return res.status(405).send('Method Not Allowed');
-  try{
-    const parsed = schema.parse(req.body);
-    const team: Team = {
-      ...parsed.team,
-      primary: parsed.team.primary.startsWith('#') ? parsed.team.primary : `#${parsed.team.primary}`,
-      secondary: parsed.team.secondary.startsWith('#') ? parsed.team.secondary : `#${parsed.team.secondary}`,
-    };
+const BodySchema = z.object({ team: TeamSchema });
 
-    const provider = getProvider();
-    const result = await provider.generate(team);
-    return res.status(200).json({ url: result.url });
-  } catch (e: any){
-    return res.status(400).send(e.message ?? 'Bad Request');
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).send('Method Not Allowed');
+  }
+
+  try {
+    const { team } = BodySchema.parse(req.body);
+
+    const hex = (v: string) => (v.startsWith('#') ? v : `#${v}`);
+    const primary = hex(team.primary);
+    const secondary = hex(team.secondary);
+    const seed = Number.isFinite(team.seed) ? (team.seed as number) : Math.floor(Math.random() * 1_000_000_000);
+
+    // Clean, deterministic prompt for a SPORTS LOGO (no text in image)
+    const prompt = [
+      'clean modern vector sports logo, fantasy football team',
+      `team name: ${team.name}`,
+      `mascot: ${team.mascot}`,
+      `primary color ${primary}, secondary color ${secondary}`,
+      'centered emblem, bold lines, crisp edges, high contrast,',
+      'no text, transparent background'
+    ].join(', ');
+
+    // 100% free, no key: Pollinations image service
+    // We return the URL directly; the client <img> can load it as-is.
+    const url =
+      `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}` +
+      `?seed=${encodeURIComponent(String(seed))}` +
+      `&width=1024&height=1024&nologo=true&enhance=true`;
+
+    return res.status(200).json({ url });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message ?? 'Bad Request' });
   }
 }
